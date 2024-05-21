@@ -64,86 +64,179 @@ NOTE: definitions: "greater than" means most positive number
 .global asmSwap
 .type asmSwap,%function     
 asmSwap:
-    PUSH {r4-r7, lr}              // Save registers and return address
 
-    // Load v1 and v2 based on element size (r2)
-    ADD r3, r0, #4               // r3 = address of v2
-    CMP r2, #1
-    BEQ load_byte
-    CMP r2, #2
-    BEQ load_halfword
-    CMP r2, #4
-    BEQ load_word
+    push {r4-r11, LR}  // Save caller's registers
 
-load_byte:
-    LDRB r4, [r0]                // Load v1 as byte
-    LDRB r5, [r3]                // Load v2 as byte
-    B check_zero
+    mov r4, r0  // Store inpAddr in r4
+    mov r5, r1  // Store signed in r5
+    mov r6, r2  // Store elementSize in r6
 
-load_halfword:
-    LDRH r4, [r0]                // Load v1 as halfword
-    LDRH r5, [r3]                // Load v2 as halfword
-    B check_zero
+    cmp r6, 1                 // Compare elementSize with 1
+    beq check_size_1          // If elementSize is 1 byte, branch to check_size_1
+    cmp r6, 2                 // Compare elementSize with 2
+    beq check_size_2          // If elementSize is 2 bytes, branch to check_size_2
+    b check_size_4            // If neither, assume 4 bytes and branch to check_size_4
 
-load_word:
-    LDR r4, [r0]                 // Load v1 as word
-    LDR r5, [r3]                 // Load v2 as word
 
-check_zero:
-    ORRS r6, r4, r5              // OR v1 and v2 to check if either is zero
-    BEQ zero_exit                // Exit if zero found
+check_size_1:
+    ldrb r7, [r4]             // Load byte from address stored in r4 into r7
+    ldrb r8, [r4, 4]          // Load byte from address r4 offset by 4 bytes into r8
+    cmp r7, 0                 // Compare the loaded byte in r7 with 0
+    beq zero_case_1           // If r7 is 0, branch to zero_case_1
+    cmp r8, 0                 // Compare the loaded byte in r8 with 0
+    beq zero_case_1           // If r8 is 0, also branch to zero_case_1
 
-    // Compare v1 and v2
-    CMP r1, #0                   // Check if signed comparison
-    BEQ compare_unsigned
-    CMP r4, r5
-    BGT swap_values
-    B no_swap
+    cmp r5, 0                 // Compare the value in r5 (determines signed or unsigned comparison) with 0
+    beq unsigned_case_1       // If r5 is 0, branch to handle as unsigned bytes
+    b signed_case_1           // Otherwise, handle as signed bytes
 
-compare_unsigned:
-    CMP r4, r5
-    BHI swap_values
 
-no_swap:
-    MOV r0, #0                   // Set return value to 0 (no swap)
-    B exit
+unsigned_case_1:
+    cmp r7, r8                // Compare the unsigned bytes in r7 and r8
+    beq equal_case_1          // If r7 equals r8, branch to equal_case_1
+    bhi swap_case_1           // If r7 is higher than r8, branch to swap_case_1
+    bls no_swap_case_1        // If r7 is lower or equal to r8, branch to no_swap_case_1
 
-swap_values:
-    MOV r6, r4                   // Swap r4 and r5
-    MOV r4, r5
-    MOV r5, r6
-    CMP r2, #1
-    BEQ store_byte
-    CMP r2, #2
-    BEQ store_halfword
-    CMP r2, #4
-    BEQ store_word
+signed_case_1:
+    ldr r11, =0xFFFFFF00      // Load the sign extension mask for signed byte comparison
+    mov r9, r7                // Move the value in r7 to r9
+    mov r10, r8               // Move the value in r8 to r10
 
-store_byte:
-    STRB r4, [r0]                // Store v1 as byte
-    STRB r5, [r3]                // Store v2 as byte
-    MOV r0, #1                   // Set return value to 1 (swap made)
-    B exit
+    lsls r9, r9, 24           // Left shift r9 by 24 bits (sign extension preparation)
+    lsr r9, r9, 24            // Logical shift right r9 by 24 bits to restore original value with sign extension
+    orrmi r9, r9, r11         // If negative, apply the sign extension mask
 
-store_halfword:
-    STRH r4, [r0]                // Store v1 as halfword
-    STRH r5, [r3]                // Store v2 as halfword
-    MOV r0, #1                   // Set return value to 1 (swap made)
-    B exit
+    lsls r10, r10, 24         // Left shift r10 by 24 bits (sign extension preparation)
+    lsr r10, r10, 24          // Logical shift right r10 by 24 bits to restore original value with sign extension
+    orrmi r10, r10, r11       // If negative, apply the sign extension mask
 
-store_word:
-    STR r4, [r0]                 // Store v1 as word
-    STR r5, [r3]                 // Store v2 as word
-    MOV r0, #1                   // Set return value to 1 (swap made)
-    B exit
+    cmp r9, r10               // Compare the sign-extended values
+    beq equal_case_1          // If r9 equals r10, branch to equal_case_1
+    bge swap_case_1           // If r9 is greater than or equal to r10, branch to swap_case_1
+    blt no_swap_case_1        // If r9 is less than r10, branch to no_swap_case_1
 
-zero_exit:
-    MOV r0, #-1                  // Set return value to -1 (zero found)
 
-exit:
-    POP {r4-r7, pc}              // Restore registers and return
+zero_case_1:
+    mov r0, -1              // Set return value to -1 indicating failure due to zero element
+    b finish                // Branch to finish label to exit the function
 
-    bx lr
+equal_case_1:
+    mov r0, 0               // Set return value to 0 indicating elements are equal, no swap needed
+    b finish                // Branch to finish label to exit the function
+
+swap_case_1:
+    strb r8, [r4]           // Store the byte in r8 at the address pointed by r4 (swap elements)
+    strb r7, [r4, 4]        // Store the byte in r7 at the address pointed by r4 + 4
+    mov r0, 1               // Set return value to 1 indicating a successful swap
+    b finish                // Branch to finish label to exit the function
+
+no_swap_case_1:
+    mov r0, 0               // Set return value to 0 indicating no swap was performed
+    b finish                // Branch to finish label to exit the function
+
+
+check_size_2:
+    ldrh r7, [r4]             // Load halfword (2 bytes) from address stored in r4 into r7
+    ldrh r8, [r4, 4]          // Load halfword (2 bytes) from address r4 offset by 4 bytes into r8
+    cmp r7, 0                 // Compare the loaded halfword in r7 with 0
+    beq zero_case_2           // If r7 is 0, branch to zero_case_2
+    cmp r8, 0                 // Compare the loaded halfword in r8 with 0
+    beq zero_case_2           // If r8 is 0, also branch to zero_case_2
+
+    cmp r5, 0                 // Compare the value in r5 (determines signed or unsigned comparison) with 0
+    beq unsigned_case_2       // If r5 is 0, branch to handle as unsigned halfwords
+    b signed_case_2           // Otherwise, handle as signed halfwords
+
+unsigned_case_2:
+    cmp r7, r8                // Compare the unsigned halfwords in r7 and r8
+    beq equal_case_2          // If r7 equals r8, branch to equal_case_2
+    bhi swap_case_2           // If r7 is higher than r8, branch to swap_case_2
+    bls no_swap_case_2        // If r7 is lower or equal to r8, branch to no_swap_case_2
+
+signed_case_2:
+    ldr r11, =0xFFFF0000      // Load the sign extension mask for signed halfword comparison
+    mov r9, r7                // Move the value in r7 to r9
+    mov r10, r8               // Move the value in r8 to r10
+
+    lsls r9, r9, 16           // Left shift r9 by 16 bits (sign extension preparation)
+    lsr r9, r9, 16            // Logical shift right r9 by 16 bits to restore original value with sign extension
+    orrmi r9, r9, r11         // If negative, apply the sign extension mask
+
+    lsls r10, r10, 16         // Left shift r10 by 16 bits (sign extension preparation)
+    lsr r10, r10, 16          // Logical shift right r10 by 16 bits to restore original value with sign extension
+    orrmi r10, r10, r11       // If negative, apply the sign extension mask
+
+    cmp r9, r10               // Compare the sign-extended values
+    beq equal_case_2          // If r9 equals r10, branch to equal_case_2
+    bge swap_case_2           // If r9 is greater than or equal to r10, branch to swap_case_2
+    blt no_swap_case_2        // If r9 is less than r10, branch to no_swap_case_2
+
+
+zero_case_2:
+    mov r0, -1              // Set return value to -1 indicating failure due to zero element
+    b finish                // Branch to finish label to exit the function
+
+equal_case_2:
+    mov r0, 0               // Set return value to 0 indicating elements are equal, no swap needed
+    b finish                // Branch to finish label to exit the function
+
+swap_case_2:
+    strh r8, [r4]           // Store the halfword in r8 at the address pointed by r4 (swap elements)
+    strh r7, [r4, 4]        // Store the halfword in r7 at the address pointed by r4 + 4
+    mov r0, 1               // Set return value to 1 indicating a successful swap
+    b finish                // Branch to finish label to exit the function
+
+no_swap_case_2:
+    mov r0, 0               // Set return value to 0 indicating no swap was performed
+    b finish                // Branch to finish label to exit the function
+
+check_size_4:
+    ldr r7, [r4]            // Load word (4 bytes) from address stored in r4 into r7
+    ldr r8, [r4, 4]         // Load word (4 bytes) from address r4 offset by 4 bytes into r8
+    cmp r7, 0               // Compare the loaded word in r7 with 0
+    beq zero_case_4         // If r7 is 0, branch to zero_case_4
+    cmp r8, 0               // Compare the loaded word in r8 with 0
+    beq zero_case_4         // If r8 is 0, also branch to zero_case_4
+
+    cmp r5, 0               // Compare the value in r5 (determines signed or unsigned comparison) with 0
+    beq unsigned_case_4     // If r5 is 0, branch to handle as unsigned words
+    b signed_case_4         // Otherwise, handle as signed words
+
+unsigned_case_4:
+    cmp r7, r8              // Compare the unsigned words in r7 and r8
+    beq equal_case_4        // If r7 equals r8, branch to equal_case_4
+    bhi swap_case_4         // If r7 is higher than r8, branch to swap_case_4
+    bls no_swap_case_4      // If r7 is lower or equal to r8, branch to no_swap_case_4
+
+
+signed_case_4:
+    cmp r7, r8               // Compare the signed words in r7 and r8
+    beq equal_case_4         // If r7 equals r8, branch to equal_case_4
+    bge swap_case_4          // If r7 is greater than or equal to r8, branch to swap_case_4
+    blt no_swap_case_4       // If r7 is less than r8, branch to no_swap_case_4
+
+zero_case_4:
+    mov r0, -1               // Set return value to -1 indicating failure due to zero element
+    b finish                 // Branch to finish label to exit the function
+
+equal_case_4:
+    mov r0, 0                // Set return value to 0 indicating elements are equal, no swap needed
+    b finish                 // Branch to finish label to exit the function
+
+swap_case_4:
+    str r8, [r4]             // Store the word in r8 at the address pointed by r4 (swap elements)
+    str r7, [r4, 4]          // Store the word in r7 at the address pointed by r4 + 4
+    mov r0, 1                // Set return value to 1 indicating a successful swap
+    b finish                 // Branch to finish label to exit the function
+
+no_swap_case_4:
+    mov r0, 0                // Set return value to 0 indicating no swap was performed
+    b finish                 // Branch to finish label to exit the function
+
+finish:
+    pop {r4-r11, LR}         // Restore caller's registers
+    mov pc, lr               // Return to caller
+
     /* YOUR asmSwap CODE ABOVE THIS LINE! ^^^^^^^^^^^^^^^^^^^^^  */
     
     
@@ -175,61 +268,40 @@ NOTE: definitions: "greater than" means most positive number
 ********************************************************************/     
 .global asmSort
 .type asmSort,%function
-asmSort:
-    PUSH {r4-r7, lr}               // Save registers and return address
+asmSort:   
 
-    MOV r4, r0                     // r4 = startAddr (base address of the array)
-    MOV r6, #0                     // r6 = swap count
+    push {r4-r11, LR}  // Save caller's registers
 
-start_sort:
-    MOV r5, r4                     // r5 = pointer to current element (initialized to startAddr)
-    MOV r7, #0                     // r7 = swapped (flag for detecting swaps in this pass)
+    mov r4, r0  // Store startAddr in r4 for looping
+    mov r9, r0  // Store startAddr in r9 to reset after each pass
+    mov r10, 0  // Initialize swap count
+    mov r11, 0  // Initialize swap check
 
-    // Load the first element (assume it is not zero at start)
-    LDR r8, [r5]                   // Load current element to r8
-    CMP r8, #0                     // Check if the current element is zero (end of array)
-    BEQ sort_done                  // If zero, sorting is done
+bubble_sort_loop:
+    mov r0, r4
+    BL asmSwap  // Call asmSwap
 
-next_element:
-    ADD r3, r5, #4                 // r3 = address of next element
-    LDR r8, [r3]                   // Load next element
-    CMP r8, #0                     // Check if the next element is zero
-    BEQ check_last_swap            // If zero, check if last pass had any swaps
+    cmp r0, -1
+    beq check_loop
 
-    // Call asmSwap to potentially swap elements
-    MOV r0, r5                     // Set r0 (inpAddr) for asmSwap
-    MOV r1, r1                     // Pass signed flag
-    MOV r2, r2                     // Pass elementSize
-    BL asmSwap                     // Call asmSwap
+    add r10, r10, r0  // Increment swap count
+    add r11, r11, r0  // Check if any swaps were made
+    add r4, r4, 4     // Move to next element
+    b bubble_sort_loop
 
-    CMP r0, #1                     // Check if a swap was made
-    BEQ update_swap_count
-    
-    //
-    CMP r0, #-1			   // Check if zero was found during swap
-    BEQ sort_done		   // End sort if zero encountered
+check_loop:
+    cmp r11, 0
+    beq sort_done
 
-    ADD r5, r5, #4                 // Move to next element
-    B next_element
-
-update_swap_count:
-    ADD r6, r6, #1                 // Increment swap count
-    MOV r7, #1                     // Set swapped flag
-    ADD r5, r5, #4                 // Move to next element
-    B next_element
-
-check_last_swap:
-    CMP r7, #1                     // Check if any swaps were made in this pass
-    BEQ reset_for_next_pass        // If swaps were made, run another pass
-    B sort_done                    // If no swaps, sorting is complete
-
-reset_for_next_pass:
-    MOV r5, r4                     // Reset pointer to start of the array
-    B start_sort                   // Start new sort pass
+    mov r4, r9  // Reset r4 to startAddr
+    mov r11, 0  // Reset swap check
+    b bubble_sort_loop
 
 sort_done:
-    MOV r0, r6                     // Return total number of swaps
-    POP {r4-r7, pc}                // Restore registers and return
+    mov r0, r10  // Move swap count to r0
+
+    pop {r4-r11, LR}
+    mov pc, lr  // Return to caller
 
     bx lr
     /* YOUR asmSort CODE ABOVE THIS LINE! ^^^^^^^^^^^^^^^^^^^^^  */
